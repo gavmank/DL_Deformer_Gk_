@@ -693,18 +693,80 @@ def load_fbx_animation_transforms(fbx_files: [str],
     return common_joint_transforms, selected_joint_rotations
 
 
+def interpolate_frames(frames: [int],
+                      joint_transforms: list,
+                      num_interpolated: int) -> tuple:
+    """Create interpolated frames between selected poses using linear interpolation.
+
+    Args:
+        frames              -- Selected frame indices from the greedy search.
+        joint_transforms    -- All transform data indexed as joint_transforms[frame_index][joint_index].
+        num_interpolated    -- Number of frames to interpolate between each pair of selected poses.
+
+    Returns:
+        Tuple of (new_frame_indices, new_transform_data) where the transforms include the interpolated frames.
+    """
+    if num_interpolated <= 0:
+        return list(range(len(frames))), [joint_transforms[i] for i in frames]
+
+    new_transforms = []
+
+    for i in range(len(frames)):
+        # Add the current keyframe
+        new_transforms.append(joint_transforms[frames[i]])
+
+        # Interpolate to next frame (if not last)
+        if i < len(frames) - 1:
+            curr_transforms = joint_transforms[frames[i]]
+            next_transforms = joint_transforms[frames[i + 1]]
+
+            for step in range(1, num_interpolated + 1):
+                alpha = step / (num_interpolated + 1)
+
+                # Interpolate each joint
+                interp_frame = []
+                for j, joint_curr in enumerate(curr_transforms):
+                    joint_next = next_transforms[j]
+
+                    # Lerp translation
+                    tx = joint_curr.translation[0] * (1-alpha) + joint_next.translation[0] * alpha
+                    ty = joint_curr.translation[1] * (1-alpha) + joint_next.translation[1] * alpha
+                    tz = joint_curr.translation[2] * (1-alpha) + joint_next.translation[2] * alpha
+
+                    # Lerp rotation (simplified linear interpolation)
+                    rx = joint_curr.rotation[0] * (1-alpha) + joint_next.rotation[0] * alpha
+                    ry = joint_curr.rotation[1] * (1-alpha) + joint_next.rotation[1] * alpha
+                    rz = joint_curr.rotation[2] * (1-alpha) + joint_next.rotation[2] * alpha
+
+                    # Lerp scale
+                    sx = joint_curr.scale[0] * (1-alpha) + joint_next.scale[0] * alpha
+                    sy = joint_curr.scale[1] * (1-alpha) + joint_next.scale[1] * alpha
+                    sz = joint_curr.scale[2] * (1-alpha) + joint_next.scale[2] * alpha
+
+                    interp_frame.append(Transform([tx, ty, tz], [rx, ry, rz], [sx, sy, sz]))
+
+                new_transforms.append(interp_frame)
+
+    # Create new frame indices (just sequential numbers)
+    new_frames = list(range(len(new_transforms)))
+
+    return new_frames, new_transforms
+
+
 def extract_poses(fbx_input_folder: str,
                   joints_to_include_in_search: [str],
                   num_output_poses: int,
-                  max_frames_per_fbx: int = 10000000):
-    """This is the main function that loads the animation data from the Fbx files and finds the num_output_poses number of best frames using a 
+                  max_frames_per_fbx: int = 10000000,
+                  num_interpolated_frames: int = 0):
+    """This is the main function that loads the animation data from the Fbx files and finds the num_output_poses number of best frames using a
     specific set of joints in a greedy search. It then generates a new animation that is applied to the current Maya scene.
-    
+
     Args:
-        fbx_input_folder            -- The folder path to scan for Fbx files and extract their animation data from. 
-        joints_to_include_in_search -- The list of joint names that should be used in the search for best poses.                                       
+        fbx_input_folder            -- The folder path to scan for Fbx files and extract their animation data from.
+        joints_to_include_in_search -- The list of joint names that should be used in the search for best poses.
         num_output_poses            -- The number of output poses (frames) to generate in our output animation.
-        max_frames_per_fbx          -- The maximum number of frames to load per individual Fbx file. 
+        max_frames_per_fbx          -- The maximum number of frames to load per individual Fbx file.
+        num_interpolated_frames     -- Number of interpolated frames to add between each selected pose (0 = no interpolation).
     """
     total_start_time = time.time()
 
@@ -745,6 +807,14 @@ def extract_poses(fbx_input_folder: str,
 
     # Perform the greedy search for the best frame indices.
     frames = find_output_frames(joint_rotations=selected_joint_rotations, num_output_poses=num_output_poses)
+
+    # Add interpolated frames between selected poses if requested.
+    if num_interpolated_frames > 0:
+        print(f'Adding {num_interpolated_frames} interpolated frames between each pose')
+        frames, common_joint_transforms = interpolate_frames(
+            frames=frames,
+            joint_transforms=common_joint_transforms,
+            num_interpolated=num_interpolated_frames)
 
     # Set the timeline range.
     cmds.playbackOptions(min=0, max=len(frames) - 1, animationStartTime=0, animationEndTime=len(frames) - 1)
